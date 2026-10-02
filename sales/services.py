@@ -269,18 +269,23 @@ def checkout(cart, shipping=None):
 
 
 @transaction.atomic
-def transition(order, new_status, note=""):
+def transition(order, new_status, note="", cancel_reason=""):
     old = order.status
     if new_status not in TRANSITIONS.get(old, set()):
         raise ValidationError(f"Invalid transition {old} -> {new_status}")
+    update_fields = ["status", "updated_at"]
     if new_status == "CANCELLED":
+        if cancel_reason and cancel_reason not in Order.CancelReason.values:
+            raise ValidationError({"cancel_reason": "Unknown cancel reason"})
+        order.cancel_reason = cancel_reason
+        update_fields.append("cancel_reason")
         for item in order.items.all():
             release(item.variant_id, item.warehouse_id or order.warehouse_id, item.quantity, "ORDER_CANCEL", str(order.id))
     if new_status == "SHIPPED":
         for item in order.items.all():
             ship(item.variant_id, item.warehouse_id or order.warehouse_id, item.quantity, "ORDER", str(order.id))
     order.status = new_status
-    order.save(update_fields=["status", "updated_at"])
+    order.save(update_fields=update_fields)
     OrderHistory.objects.create(order=order, from_status=old, to_status=new_status, note=note)
     if new_status == "PAID":
         from .tasks import send_order_confirmation
@@ -338,6 +343,7 @@ def expire_unpaid_orders(max_age_hours):
     cutoff = timezone.now() - timezone.timedelta(hours=max_age_hours)
     expired = 0
     for order in Order.objects.filter(status="PENDING_PAYMENT", created_at__lt=cutoff).select_for_update():
-        transition(order, "CANCELLED", note=f"Payment not received within {max_age_hours}h")
+        transition(order, "CANCELLED", note=f"Payment not received within {max_age_hours}h",
+                   cancel_reason=Order.CancelReason.PAYMENT_TIMEOUT)
         expired += 1
     return expired

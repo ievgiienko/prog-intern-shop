@@ -135,7 +135,8 @@ class OrderViewSet(OwnedMixin, viewsets.ReadOnlyModelViewSet):
             raise PermissionDenied("Staff role required")
         data = TransitionSerializer(data=request.data)
         data.is_valid(raise_exception=True)
-        order = transition(self.get_object(), data.validated_data["status"], note=data.validated_data["note"])
+        order = transition(self.get_object(), data.validated_data["status"], note=data.validated_data["note"],
+                           cancel_reason=request.data.get("cancel_reason", ""))
         return response.Response(OrderSerializer(order, context=self.get_serializer_context()).data)
 
     @decorators.action(detail=True, methods=["post"])
@@ -144,8 +145,12 @@ class OrderViewSet(OwnedMixin, viewsets.ReadOnlyModelViewSet):
         order = self.get_object()
         if not request.user.is_staff and order.status not in {"NEW", "PENDING_PAYMENT", "PAID"}:
             raise PermissionDenied("This order can no longer be cancelled online")
+        reason = Order.CancelReason.CUSTOMER_REQUEST
+        if request.user.is_staff:
+            reason = request.data.get("cancel_reason") or reason  # staff may state the real reason
         with transaction.atomic():
-            order = transition(order, "CANCELLED", note=f"Cancelled by {request.user.username}")
+            order = transition(order, "CANCELLED", note=f"Cancelled by {request.user.username}",
+                               cancel_reason=reason)
         return response.Response(OrderSerializer(order, context=self.get_serializer_context()).data)
 
 

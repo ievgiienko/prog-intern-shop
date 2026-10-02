@@ -134,7 +134,12 @@ class ProductAdmin(admin.ModelAdmin):
                 ProductImage.objects.bulk_update(images, ["primary"])
 
     def _set(self, request, queryset, **fields):
-        updated = queryset.update(**fields)
+        updated = 0
+        for product in queryset:
+            for name, value in fields.items():
+                setattr(product, name, value)
+            product.save()
+            updated += 1
         self.message_user(request, f"{updated} product(s) updated.", messages.SUCCESS)
 
     @admin.action(description="Activate selected products (visible in the storefront)")
@@ -246,13 +251,21 @@ class ReviewAdmin(admin.ModelAdmin):
     autocomplete_fields = ("product",)
     raw_id_fields = ("customer",)
 
+    def _moderate(self, request, queryset, status, label):
+        count = 0
+        for review in queryset:
+            review.status = status
+            review.save()
+            count += 1
+        self.message_user(request, f"{count} review(s) {label}.")
+
     @admin.action(description="Approve selected reviews")
     def approve(self, request, queryset):
-        self.message_user(request, f"{queryset.update(status=Review.Status.APPROVED)} review(s) approved.")
+        self._moderate(request, queryset, Review.Status.APPROVED, "approved")
 
     @admin.action(description="Reject selected reviews")
     def reject(self, request, queryset):
-        self.message_user(request, f"{queryset.update(status=Review.Status.REJECTED)} review(s) rejected.")
+        self._moderate(request, queryset, Review.Status.REJECTED, "rejected")
 
 
 @admin.register(Wishlist)

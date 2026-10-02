@@ -219,7 +219,9 @@ def order_cancel(request, order_id):
         messages.error(request, "This order can no longer be cancelled online. Please contact support.")
         return redirect(back)
     try:
-        services.transition(order, "CANCELLED", note="Cancelled by staff" if request.user.is_staff else "Cancelled by customer")
+        services.transition(order, "CANCELLED",
+                            note="Cancelled by staff" if request.user.is_staff else "Cancelled by customer",
+                            cancel_reason=Order.CancelReason.CUSTOMER_REQUEST)
         messages.info(request, f"Order #{order.id} was cancelled and the stock was released.")
     except ValidationError as exc:
         messages.error(request, _error_text(exc))

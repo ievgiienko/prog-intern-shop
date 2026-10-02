@@ -285,8 +285,8 @@ class Command(BaseCommand):
                 updates["origin_country_code"] = {"ethiopia": "ET", "kenya": "KE", "colombia": "CO", "brazil": "BR",
                                                   "costa rica": "CR", "guatemala": "GT", "peru": "PE",
                                                   "rwanda": "RW", "indonesia": "ID"}.get(origin, "")
-            if product.launched_at is None:
-                updates["launched_at"] = product.created_at.date()
+            if product.launched_at is None or product.launched_at > product.created_at.date():
+                updates["launched_at"] = product.created_at.date()  # the signal stamps "today" on creation; backdate it
             if product.weight_grams is None and product.kind == "COFFEE":
                 updates["weight_grams"] = 250
             updates["is_limited"] = "limited" in chosen
@@ -296,8 +296,9 @@ class Command(BaseCommand):
     @staticmethod
     def _catalog_history(rng):
         """Backdated price and visibility changes, so 'what did it cost in March' is answerable."""
-        if ProductStatusHistory.objects.exists():
-            return
+        if ProductStatusHistory.objects.filter(note="Published").exists():
+            return  # already seeded: every seeded product gets a "Published" row below
+        ProductStatusHistory.objects.all().delete()  # drop the rows the signal wrote on creation; rebuild a backdated timeline
         now = timezone.now()
         for index, product in enumerate(Product.objects.order_by("id")):
             born = product.created_at

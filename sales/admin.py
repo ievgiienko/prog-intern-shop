@@ -45,6 +45,27 @@ class PaymentInline(admin.TabularInline):
         return False
 
 
+STAFF_CANCEL_REASONS = [
+    Order.CancelReason.CUSTOMER_REQUEST,
+    Order.CancelReason.SUSPECTED_FRAUD,
+    Order.CancelReason.DUPLICATE,
+    Order.CancelReason.OUT_OF_STOCK,
+    Order.CancelReason.ADDRESS_INVALID,
+]  # PAYMENT_TIMEOUT / PAYMENT_FAILED are set by the system, staff do not pick them
+
+
+def _cancel_action(reason):
+    @admin.action(description=f"Cancel: {Order.CancelReason(reason).label} (releases reserved stock)")
+    def action(modeladmin, request, queryset):
+        modeladmin._transition(request, queryset, "CANCELLED", "Cancelled", cancel_reason=reason)
+
+    action.__name__ = f"cancel_{reason.lower()}"
+    return action
+
+
+CANCEL_ACTIONS = [_cancel_action(reason) for reason in STAFF_CANCEL_REASONS]
+
+
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
     list_display = ("id", "customer", "status", "total", "currency", "items_count", "warehouse", "channel_group",
@@ -60,7 +81,7 @@ class OrderAdmin(admin.ModelAdmin):
                        "device", "browser", "os", "session_id", "campaign", "coupon_code", "paid_at", "shipped_at",
                        "delivered_at", "cancelled_at", "refunded_at")
     inlines = [OrderItemInline, PaymentInline, OrderHistoryInline]
-    actions = ["mark_processing", "mark_packed", "mark_shipped", "mark_delivered", "cancel_orders"]
+    actions = ["mark_processing", "mark_packed", "mark_shipped", "mark_delivered", *CANCEL_ACTIONS]
     fieldsets = (
         (None, {"fields": ("customer", "status", "warehouse", "source", "fraud_score", "access_token", "is_test_data")}),
         ("Amounts", {"fields": ("subtotal", "discount_amount", "shipping_amount", "tax_amount", "total",
@@ -80,17 +101,18 @@ class OrderAdmin(admin.ModelAdmin):
         return super().get_queryset(request).annotate(n_items=Count("items"))
 
     def has_add_permission(self, request):
-        return False  # orders are created through checkout so that stock is reserved correctly
+        return False   # orders are created through checkout so that stock is reserved correctly
 
     @admin.display(description="Items", ordering="n_items")
     def items_count(self, obj):
         return obj.n_items
 
-    def _transition(self, request, queryset, status, label):
+    def _transition(self, request, queryset, status, label, cancel_reason=""):
         done, failed = 0, []
         for order in queryset:
             try:
-                transition(order, status, note=f"{label} via admin by {request.user.username}")
+                transition(order, status, note=f"{label} via admin by {request.user.username}",
+                           cancel_reason=cancel_reason)
                 done += 1
             except ValidationError as exc:
                 failed.append(f"#{order.id}: {exc.detail if isinstance(exc.detail, str) else ' '.join(map(str, exc.detail))}")
@@ -114,10 +136,6 @@ class OrderAdmin(admin.ModelAdmin):
     @admin.action(description="Mark as DELIVERED")
     def mark_delivered(self, request, queryset):
         self._transition(request, queryset, "DELIVERED", "Delivered")
-
-    @admin.action(description="Cancel selected orders (releases reserved stock)")
-    def cancel_orders(self, request, queryset):
-        self._transition(request, queryset, "CANCELLED", "Cancelled")
 
 
 class CartItemInline(admin.TabularInline):
