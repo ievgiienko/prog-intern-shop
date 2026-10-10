@@ -5,7 +5,7 @@ from django.urls import reverse
 
 from catalog.models import ProductVariant
 from operations.models import Inventory
-from sales.models import Cart, Discount, Order
+from sales.models import Cart, Discount, DiscountRedemption, Order
 
 pytestmark = pytest.mark.django_db
 
@@ -75,8 +75,17 @@ def test_discount_code_is_applied_and_usage_counted(client, catalog, customer):
     assert "not valid" in bad.content.decode()
     client.post(reverse("checkout"), {"shipping_name": "A", "contact_email": "a@example.test", "shipping_address": "x",
                                        "shipping_city": "y", "shipping_postal_code": "1", "shipping_country": "Spain"})
-    assert Order.objects.get().discount_amount == Decimal("3.55")
+    order = Order.objects.get()
+
+    assert order.discount_amount == Decimal("3.55")
+    assert order.discount.code == "WELCOME10"
+    assert order.coupon_code == "WELCOME10"
     assert Discount.objects.get().times_used == 1
+
+    redemption = DiscountRedemption.objects.get(order=order)
+    assert redemption.customer == customer
+    assert redemption.code == "WELCOME10"
+    assert redemption.amount == Decimal("3.55")
 
 
 def test_customer_can_cancel_unpaid_order_and_stock_is_released(client, catalog, customer):

@@ -12,7 +12,7 @@ from catalog.models import ProductVariant
 from operations.models import Inventory
 from operations.services import release, reserve, ship
 
-from .models import Cart, CartItem, Discount, Order, OrderHistory, OrderItem, Payment
+from .models import Cart, CartItem, Discount, Order, OrderHistory, OrderItem, Payment, DiscountRedemption
 from .payments import OutcomeGateway, get_gateway
 
 TRANSITIONS = {
@@ -111,31 +111,147 @@ def add_to_cart(cart, variant, quantity=1, replace=False):
     return item
 
 
-def discount_is_applicable(discount, subtotal, now=None):
+def discount_is_applicable(discount, subtotal, customer=None, now=None):
+    """
+    Check all customer-independent and customer-dependent discount rules.
+
+    A guest cart may not have a customer yet, so first-order/per-customer
+    checks are deferred to checkout when the guest identity is known.
+    """
     now = now or timezone.now()
-    return (discount.active and discount.starts_at <= now <= discount.ends_at
-            and subtotal >= discount.minimum_cart and discount.times_used < discount.usage_limit)
+
+    if not discount.active:
+        return False
+
+    if not (discount.starts_at <= now <= discount.ends_at):
+        return False
+
+    if subtotal < discount.minimum_cart:
+        return False
+
+    if discount.times_used >= discount.usage_limit:
+        return False
+
+    if discount.kind == Discount.Kind.FREE_SHIPPING:
+        return False
+
+    if customer is not None:
+        redemptions = DiscountRedemption.objects.filter(
+            discount=discount,
+            customer=customer,
+        )
+
+        if redemptions.count() >= discount.max_per_customer:
+            return False
+
+        if discount.first_order_only and Order.objects.filter(customer=customer).exists():
+            return False
+
+    return True
+
+def validate_discount_for_customer(discount, subtotal, customer):
+    """
+    Raise a customer-facing error explaining why a discount cannot be used.
+
+    This is the single validation path used by both apply-code and checkout.
+    """
+    now = timezone.now()
+
+    if not discount.active:
+        raise ValidationError("This discount code is not valid for your cart")
+
+    if not (discount.starts_at <= now <= discount.ends_at):
+        raise ValidationError("This discount code is not valid for your cart")
+
+    if subtotal < discount.minimum_cart:
+        raise ValidationError(
+            f"This discount requires a minimum cart value of {discount.minimum_cart}"
+        )
+
+    if discount.times_used >= discount.usage_limit:
+        raise ValidationError("This discount code has reached its usage limit")
+
+    if discount.kind == Discount.Kind.FREE_SHIPPING:
+        raise ValidationError(
+            "This discount code offers free shipping, but free shipping is not available."
+        )
+
+    redemptions = DiscountRedemption.objects.filter(
+        discount=discount,
+        customer=customer,
+    )
+
+    if redemptions.count() >= discount.max_per_customer:
+        raise ValidationError(
+            "You have already used this discount code the maximum number of times."
+        )
+
+    if discount.first_order_only and Order.objects.filter(customer=customer).exists():
+        raise ValidationError(
+            "This discount code is available only on your first order."
+        )
+
+    return True
+
 
 
 def apply_discount_code(cart, code):
     code = (code or "").strip().upper()
+
     if not code:
         cart.discount = None
         cart.save(update_fields=["discount", "updated_at"])
         return None
+
     discount = Discount.objects.filter(code__iexact=code).first()
-    if discount is None or not discount_is_applicable(discount, cart.subtotal):
+    if discount is None:
         raise ValidationError("This discount code is not valid for your cart")
+
+    customer = cart.customer
+
+    if not discount_is_applicable(
+        discount,
+        cart.subtotal,
+        customer=customer,
+    ):
+        if discount.kind == Discount.Kind.FREE_SHIPPING:
+            raise ValidationError(
+                "This discount code offers free shipping, but free shipping is not available."
+            )
+
+        if customer is not None:
+            validate_discount_for_customer(
+                discount,
+                cart.subtotal,
+                customer,
+            )
+
+        raise ValidationError("This discount code is not valid for your cart")
+
+    # Stacking policy:
+    # a cart can contain one discount only; applying another code replaces it.
     cart.discount = discount
     cart.save(update_fields=["discount", "updated_at"])
     return discount
 
 
-def discount_amount_for(cart, subtotal):
+def discount_amount_for(cart, subtotal, customer=None):
     discount = cart.discount
-    if not discount or not discount_is_applicable(discount, subtotal):
+    customer = customer if customer is not None else cart.customer
+
+    if not discount or not discount_is_applicable(
+        discount,
+        subtotal,
+        customer=customer,
+    ):
         return Decimal("0")
-    amount = discount.value if discount.kind == "FIXED" else subtotal * discount.value / 100
+
+    amount = (
+        discount.value
+        if discount.kind == Discount.Kind.FIXED
+        else subtotal * discount.value / 100
+    )
+
     return min(amount, subtotal).quantize(Decimal("0.01"))
 
 
@@ -143,7 +259,13 @@ def cart_totals(cart):
     """Consumer prices are VAT-inclusive (EU retail): ``tax`` is the VAT *contained* in the total, not added on top."""
     items = list(cart.items.select_related("variant__product"))
     subtotal = sum((i.variant.effective_price * i.quantity for i in items), Decimal("0"))
-    discount = discount_amount_for(cart, subtotal)
+
+    discount = discount_amount_for(
+        cart,
+        subtotal,
+        customer=cart.customer,
+    )
+
     total = subtotal - discount
     tax = Decimal("0")
     for i in items:
@@ -223,68 +345,225 @@ def allocate(items):
 
 @transaction.atomic
 def checkout(cart, shipping=None):
-    """Turn an active cart into a PENDING_PAYMENT order, reserving stock line by line (possibly in several warehouses)."""
+    """
+    Turn an active cart into a PENDING_PAYMENT order.
+
+    Discount eligibility is checked again here because a cart can become
+    stale after the code was originally applied.
+    """
     shipping = shipping or {}
+
     if not cart.active:
         raise ValidationError("This cart has already been checked out")
-    totals = cart_totals(cart)
-    items = totals["items"]
+
+    items = list(
+        cart.items.select_related("variant__product")
+    )
+
     if not items:
         raise ValidationError("Cart is empty")
+
     for item in items:
         if not (item.variant.active and item.variant.product.is_visible):
-            raise ValidationError(f"{item.variant.product.name} is no longer available")
+            raise ValidationError(
+                f"{item.variant.product.name} is no longer available"
+            )
+
+    # Resolve the real customer before validating customer-specific discount
+    # rules. Guest carts are assigned their guest User here.
     customer = cart.customer
+
     if customer is None:
         email = shipping.get("contact_email", "")
         if not email:
-            raise ValidationError({"contact_email": "An e-mail address is required for guest checkout"})
-        customer = get_or_create_guest_user(email, shipping.get("shipping_name", ""))
+            raise ValidationError({
+                "contact_email": "An e-mail address is required for guest checkout"
+            })
+
+        customer = get_or_create_guest_user(
+            email,
+            shipping.get("shipping_name", ""),
+        )
+
+    subtotal = sum(
+        (item.variant.effective_price * item.quantity for item in items),
+        Decimal("0"),
+    )
+
+    discount = cart.discount
+
+    # Lock the discount row while consuming its global quota. This prevents
+    # concurrent checkouts from both consuming the same final slot.
+    if discount is not None:
+        discount = Discount.objects.select_for_update().get(pk=discount.pk)
+
+        validate_discount_for_customer(
+            discount,
+            subtotal,
+            customer,
+        )
+
+        discount_amount = discount_amount_for(
+            cart,
+            subtotal,
+            customer=customer,
+        )
+    else:
+        discount_amount = Decimal("0")
+
+    total = subtotal - discount_amount
+
+    tax = Decimal("0")
+    for item in items:
+        gross = item.variant.effective_price * item.quantity
+
+        if subtotal:
+            gross -= discount_amount * gross / subtotal
+
+        rate = item.variant.product.tax_rate / 100
+        tax += gross - gross / (1 + rate)
+
+    tax = tax.quantize(Decimal("0.01"))
+
     plan = allocate(items)
-    primary_warehouse = Counter(w for _, w, _ in plan).most_common(1)[0][0]
+    primary_warehouse = Counter(
+        warehouse for _, warehouse, _ in plan
+    ).most_common(1)[0][0]
+
     profile = getattr(customer, "customer_profile", None)
+
     order = Order.objects.create(
-        customer=customer, warehouse_id=primary_warehouse, status="PENDING_PAYMENT",
-        subtotal=totals["subtotal"], discount_amount=totals["discount"], tax_amount=totals["tax"],
-        total=totals["total"], fraud_score=risk_score(customer, totals["total"]),
+        customer=customer,
+        warehouse_id=primary_warehouse,
+        status="PENDING_PAYMENT",
+        subtotal=subtotal,
+        discount_amount=discount_amount,
+        tax_amount=tax,
+        total=total.quantize(Decimal("0.01")),
+        fraud_score=risk_score(customer, total),
         source=getattr(profile, "acquisition_source", "direct"),
+        discount=discount,
+        coupon_code=discount.code if discount else "",
         **{k: shipping.get(k, "") for k in SHIPPING_FIELDS},
     )
+
     for item, warehouse_id, quantity in plan:
         product = item.variant.product
-        reserve(item.variant_id, warehouse_id, quantity, "ORDER", str(order.id))
+
+        reserve(
+            item.variant_id,
+            warehouse_id,
+            quantity,
+            "ORDER",
+            str(order.id),
+        )
+
         OrderItem.objects.create(
-            order=order, variant=item.variant, warehouse_id=warehouse_id, product_name=product.name,
-            sku=item.variant.sku, quantity=quantity, unit_price=item.variant.effective_price,
-            unit_cost=product.purchase_cost, tax_rate=product.tax_rate)
-    if totals["discount"] > 0 and cart.discount_id:
-        Discount.objects.filter(pk=cart.discount_id).update(times_used=F("times_used") + 1)
-    note = "Split across warehouses" if len({w for _, w, _ in plan}) > 1 else ""
-    OrderHistory.objects.create(order=order, from_status="NEW", to_status="PENDING_PAYMENT", note=note)
+            order=order,
+            variant=item.variant,
+            warehouse_id=warehouse_id,
+            product_name=product.name,
+            sku=item.variant.sku,
+            quantity=quantity,
+            unit_price=item.variant.effective_price,
+            unit_cost=product.purchase_cost,
+            tax_rate=product.tax_rate,
+        )
+
+    if discount is not None:
+        Discount.objects.filter(pk=discount.pk).update(
+            times_used=F("times_used") + 1
+        )
+
+        DiscountRedemption.objects.create(
+            discount=discount,
+            order=order,
+            customer=customer,
+            code=discount.code,
+            amount=discount_amount,
+            currency=order.currency,
+            created_at=timezone.now()
+        )
+
+    note = (
+        "Split across warehouses"
+        if len({w for _, w, _ in plan}) > 1
+        else ""
+    )
+
+    OrderHistory.objects.create(
+        order=order,
+        from_status="NEW",
+        to_status="PENDING_PAYMENT",
+        note=note,
+    )
+
     cart.active = False
+
     if cart.customer_id is None:
-        cart.customer = customer  # keep the guest cart attached to the guest user for traceability
-    cart.save(update_fields=["active", "customer", "updated_at"])
+        cart.customer = customer
+
+    cart.save(
+        update_fields=["active", "customer", "updated_at"]
+    )
+
     return order
 
 
 @transaction.atomic
 def transition(order, new_status, note=""):
     old = order.status
+
     if new_status not in TRANSITIONS.get(old, set()):
-        raise ValidationError(f"Invalid transition {old} -> {new_status}")
+        raise ValidationError(
+            f"Invalid transition {old} -> {new_status}"
+        )
+
     if new_status == "CANCELLED":
         for item in order.items.all():
-            release(item.variant_id, item.warehouse_id or order.warehouse_id, item.quantity, "ORDER_CANCEL", str(order.id))
+            release(
+                item.variant_id,
+                item.warehouse_id or order.warehouse_id,
+                item.quantity,
+                "ORDER_CANCEL",
+                str(order.id),
+            )
+
+        # A cancellation restores the campaign quota consumed by this order.
+        # The redemption row remains as historical evidence that the code
+        # was actually used by this order.
+        if order.discount_id and order.discount_amount > 0:
+            Discount.objects.filter(pk=order.discount_id).update(
+                times_used=F("times_used") - 1
+            )
+
     if new_status == "SHIPPED":
         for item in order.items.all():
-            ship(item.variant_id, item.warehouse_id or order.warehouse_id, item.quantity, "ORDER", str(order.id))
+            ship(
+                item.variant_id,
+                item.warehouse_id or order.warehouse_id,
+                item.quantity,
+                "ORDER",
+                str(order.id),
+            )
+
     order.status = new_status
     order.save(update_fields=["status", "updated_at"])
-    OrderHistory.objects.create(order=order, from_status=old, to_status=new_status, note=note)
+
+    OrderHistory.objects.create(
+        order=order,
+        from_status=old,
+        to_status=new_status,
+        note=note,
+    )
+
     if new_status == "PAID":
         from .tasks import send_order_confirmation
-        transaction.on_commit(lambda: send_order_confirmation.delay(order.id))
+
+        transaction.on_commit(
+            lambda: send_order_confirmation.delay(order.id)
+        )
+
     return order
 
 
