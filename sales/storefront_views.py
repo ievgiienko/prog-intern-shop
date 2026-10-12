@@ -53,6 +53,7 @@ def cart_detail(request):
 
 @require_POST
 def cart_add(request):
+    is_ajax = request.headers.get("X-Requested-With") =="XMLHttpRequest"
     form = AddToCartForm(request.POST)
     fallback = reverse("cart_detail")
     if not form.is_valid():
@@ -63,9 +64,17 @@ def cart_add(request):
         services.add_to_cart(services.get_cart_for_request(request), variant, form.cleaned_data["quantity"])
     except ValidationError as exc:
         messages.error(request, _error_text(exc))
+        if is_ajax: 
+            return JsonResponse({"error": _error_text(exc)}, status=400)
         return redirect(_safe_next(request, variant.product.get_absolute_url()))
+    if is_ajax: cart = services.get_cart_for_request(request)
+    totals = services.cart_totals(cart)
+    items = [{ "id": item.id, "name": item.variant.product.name, "quantity": item.quantity,}
+             for item in cart.items.select_related("variant__product").all()]
+    return JsonResponse({"cart_count": cart.item_count, "subtotal": str(totals["subtotal"]), "items": items, "total": str(totals["total"])}) 
     messages.success(request, f"Added {variant.product.name} to your cart.")
     return redirect(_safe_next(request, fallback))
+
 
 
 def _own_item(request, item_id):
@@ -77,6 +86,7 @@ def _own_item(request, item_id):
 
 @require_POST
 def cart_update(request):
+    is_ajax = request.headers.get("X-Requested-With") == "XMLHttpRequest"
     form = UpdateCartItemForm(request.POST)
     if form.is_valid():
         item = _own_item(request, form.cleaned_data["item"])
@@ -87,11 +97,20 @@ def cart_update(request):
         else:
             try:
                 services.add_to_cart(item.cart, item.variant, quantity, replace=True)
-                messages.success(request, "Cart updated.")
+                if not is_ajax:
+                 messages.success(request, "Cart updated.")
             except ValidationError as exc:
                 messages.error(request, _error_text(exc))
+                if is_ajax:
+                    return JsonResponse({"error":_error_text}, status=400)
     else:
         messages.error(request, "Invalid quantity.")
+    if is_ajax: 
+        cart = services.get_cart_for_request(request)
+        totals = services.cart_totals(cart)
+        items = [{ "id": item.id, "name": item.variant.product.name, "quantity": item.quantity} 
+                 for item in cart.items.select_related("variant__product").all()]
+        return JsonResponse({"cart_count": cart.item_count, "subtotal": str(totals["subtotal"]), "total": str(totals["total"]), "items": items,})
     return redirect("cart_detail")
 
 

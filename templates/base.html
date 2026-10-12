@@ -46,7 +46,33 @@
       {% else %}
         <a href="{% url 'login' %}?next={{ request.get_full_path|urlencode }}" class="icon-link"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M4 21c1-4 4.5-6 8-6s7 2 8 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg><span>Log in</span></a>
       {% endif %}
-      <a href="{% url 'cart_detail' %}" class="cart-link" aria-label="Cart, {{ cart_count }} item{{ cart_count|pluralize }}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h14l-1.5 9h-11L5 4H2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="20" r="1.4" fill="currentColor"/><circle cx="17" cy="20" r="1.4" fill="currentColor"/></svg><span>Cart</span>{% if cart_count %}<span class="badge">{{ cart_count }}</span>{% endif %}</a>
+      <a href="{% url 'cart_detail' %}" class="cart-link" aria-label="Cart, {{ cart_count }} item{{ cart_count|pluralize }}"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 7h14l-1.5 9h-11L5 4H2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="9" cy="20" r="1.4" fill="currentColor"/><circle cx="17" cy="20" r="1.4" fill="currentColor"/></svg><span>Cart</span>{% if cart_count %}<span class="badge" data-cart-count>{{ cart_count }}</span>{% endif %}</a>
+      <!--Mini-cart-->
+      <div class="mini-cart" id="mini-cart" hidden>
+        <div class="mini-cart__header">
+          <strong>Your cart</strong>
+          <button type="button" class="mini-cart__close" aria-label="Close cart">x</button>
+        </div>
+        <div class="mini-cart__body" id="mini-cart__body">
+          {% if cart_count %}
+           <p>Items in cart: <span data-mini-cart-count> {{cart_count}} </span></p>
+           <p data-mini-cart-loading hidden>Updating</p>
+           {% for item in cart.items.all %}
+        <div class="mini-cart__item" data-item-id="{{ item.id }}">
+          <form hidden>
+            {% csrf_token %}
+          </form>
+          <span>{{ item.variant.product.name }}</span>
+          <div class="mini-cart__quantity">
+            <button type="button" data-mini-minus> - </button>
+            <span>{{ item.quantity }}</span>
+            <button type="button" data-mini-plus> + </button>
+          </div>
+        </div>
+          {% endfor %}
+          {% endif %}
+        </div>
+      </div>
     </div>
   </div>
 </header>
