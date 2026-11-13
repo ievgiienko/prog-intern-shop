@@ -2,7 +2,7 @@ import os
 from pathlib import Path
 
 from django.conf import settings
-from django.db.models import Count, Q
+from django.db.models import Count, Prefetch, Q
 
 from .models import Category, live_category_counts
 
@@ -21,7 +21,24 @@ ASSET_VERSION = _asset_version()
 
 def storefront(request):
     """Navigation data every storefront page needs: live categories and the cart badge."""
-    categories = live_category_counts()
+    categories = live_category_counts().prefetch_related(
+        Prefetch(
+            "children",
+            queryset=Category.objects
+                .annotate(
+                    product_count=Count(
+                        "products",
+                        filter=Q(
+                            products__active=True,
+                            products__status="ACTIVE",
+                        ),
+                        distinct=True,
+                    )
+                )
+                .filter(product_count__gt=0)
+                .order_by("position", "name"),
+        )
+    )
     cart_count = 0
     user = getattr(request, "user", None)
     if user is not None and user.is_authenticated:

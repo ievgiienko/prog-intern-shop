@@ -150,6 +150,24 @@ def product_list(request, category_slug=None):
         title, description = f"Results for “{query}”", ""
     else:
         title, description = "All coffee & equipment", "Everything we roast and every tool we trust, in one place."
+
+    child_categories = []
+    if category:
+        child_categories = (
+            category.children
+            .annotate(
+                product_count=Count(
+                    "products",
+                    filter=Q(
+                        products__active=True,
+                        products__status="ACTIVE",
+                    ),
+                    distinct=True,
+                )
+            )
+            .filter(product_count__gt=0)
+            .order_by("position", "name")
+        )
     return render(request, "catalog/product_list.html", {
         "category": category, "page": page, "paginator": paginator, "query": query, "sort": sort,
         "sort_options": SORT_OPTIONS, "selected": selected, "origins": origins, "roasts": roasts, "brews": brews,
@@ -157,6 +175,7 @@ def product_list(request, category_slug=None):
         "active_filters": active_filters, "title": title, "description": description,
         "meta_description": (description or f"Shop {title.lower()} at {settings.STORE_NAME}.")[:160],
         "categories": _live_categories(),
+        "child_categories": child_categories,
     })
 
 

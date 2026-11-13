@@ -5,7 +5,23 @@
 {% block content %}
 <div class="page-head">
   <div>
-    <nav class="breadcrumbs" aria-label="Breadcrumb"><a href="{% url 'storefront' %}">Home</a> › <a href="{% url 'product_list' %}">Shop</a>{% if category %} › <span aria-current="page">{{ category.name }}</span>{% endif %}</nav>
+
+    <nav class="breadcrumbs" aria-label="Breadcrumb">
+  <a href="{% url 'storefront' %}">Home</a>
+  ›
+  <a href="{% url 'product_list' %}">Shop</a>
+  {% if category %}
+    ›
+    {% if category.parent %}
+      <a href="{{ category.parent.get_absolute_url }}">
+        {{ category.parent.name }}
+      </a>
+      ›
+    {% endif %}
+    <span aria-current="page">{{ category.name }}</span>
+  {% endif %}
+</nav>
+
     <h1>{{ title }}</h1>
     {% if description %}<p class="lead">{{ description }}</p>{% endif %}
   </div>
@@ -15,6 +31,17 @@
 {% if not category and not query %}
 <div class="category-strip" aria-label="Categories">
   {% for c in categories %}<a class="chip" href="{{ c.get_absolute_url }}">{{ c.name }}</a>{% endfor %}
+</div>
+{% endif %}
+
+{% if category and child_categories %}
+<div class="category-strip" aria-label="Subcategories">
+  {% for child in child_categories %}
+  <a class="chip" href="{{ child.get_absolute_url }}">
+    {{ child.name }}
+    <span class="nav-count">{{ child.product_count }}</span>
+  </a>
+  {% endfor %}
 </div>
 {% endif %}
 

@@ -33,7 +33,27 @@
     </a>
     <nav class="main-nav" id="site-nav" aria-label="Main">
       <a href="{% url 'product_list' %}" {% if request.resolver_match.url_name == 'product_list' %}aria-current="page"{% endif %}>Shop all</a>
-      {% for c in nav_categories %}<a href="{{ c.get_absolute_url }}" {% if category and category.slug == c.slug %}aria-current="page"{% endif %}>{{ c.name }}</a>{% endfor %}
+      {% for c in nav_categories %}
+<div class="nav-category">
+  <a
+    href="{{ c.get_absolute_url }}"
+    {% if category and category.slug == c.slug %}aria-current="page"{% endif %}
+  >
+    {{ c.name }}
+  </a>
+
+  {% if c.children.all %}
+  <div class="nav-children">
+    {% for child in c.children.all %}
+    <a href="{{ child.get_absolute_url }}">
+      {{ child.name }}
+      <span class="nav-count">{{ child.product_count }}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% endif %}
+</div>
+{% endfor %}
       <a href="{% url 'about' %}" class="nav-secondary" {% if request.resolver_match.url_name == 'about' %}aria-current="page"{% endif %}>Our story</a>
     </nav>
     <form class="search" action="{% url 'product_list' %}" method="get" role="search">
