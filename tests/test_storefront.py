@@ -59,3 +59,94 @@ def test_public_api_hides_non_live_products_but_staff_sees_all(client, catalog, 
     assert skus == {"P1", "P2", "P3", "P4", "P5"}
     detail = client.get(f"/api/catalog/products/{catalog['products']['P1'].id}/").json()
     assert detail["primary_image_url"].endswith("P1.jpg") and detail["in_stock"] is True
+
+def test_category_counts_include_parent_and_children(client, catalog):
+    from catalog.models import Category
+
+    parent = Category.objects.create(name="Filter Coffee", slug="filter-coffee")
+    africa = Category.objects.create(name="Africa", slug="africa", parent=parent)
+    latin_america = Category.objects.create(
+        name="Latin America",
+        slug="latin-america",
+        parent=parent,
+    )
+
+    catalog["products"]["P1"].category = africa
+    catalog["products"]["P1"].save(update_fields=["category"])
+
+    catalog["products"]["P2"].category = africa
+    catalog["products"]["P2"].save(update_fields=["category"])
+
+    catalog["products"]["P3"].category = latin_america
+    catalog["products"]["P3"].save(update_fields=["category"])
+
+    response = client.get(parent.get_absolute_url())
+
+    assert response.status_code == 200
+
+    parent_category = next(
+        category
+        for category in response.context["nav_categories"]
+        if category.pk == parent.pk
+    )
+    assert parent_category.product_count == 3
+
+    child_counts = {
+        child.name: child.product_count
+        for child in response.context["child_categories"]
+    }
+    assert child_counts == {
+        "Africa": 2,
+        "Latin America": 1,
+    }
+
+
+def test_child_category_breadcrumbs(client, catalog):
+    from catalog.models import Category
+
+    parent = Category.objects.create(name="Filter Coffee", slug="filter-coffee")
+    child = Category.objects.create(
+        name="Africa",
+        slug="africa",
+        parent=parent,
+    )
+
+    response = client.get(child.get_absolute_url())
+
+    assert response.status_code == 200
+
+    html = response.content.decode()
+    assert "Home" in html
+    assert "Shop" in html
+    assert "Filter Coffee" in html
+    assert "Africa" in html
+    assert parent.get_absolute_url() in html
+
+
+def test_subcategories_are_displayed_in_navigation(client, catalog):
+    from catalog.models import Category
+
+    parent = Category.objects.create(name="Filter Coffee", slug="filter-coffee")
+    africa = Category.objects.create(name="Africa", slug="africa", parent=parent)
+    latin_america = Category.objects.create(
+        name="Latin America",
+        slug="latin-america",
+        parent=parent,
+    )
+
+    catalog["products"]["P1"].category = africa
+    catalog["products"]["P1"].save(update_fields=["category"])
+
+    catalog["products"]["P3"].category = latin_america
+    catalog["products"]["P3"].save(update_fields=["category"])
+
+    response = client.get(reverse("storefront"))
+
+    assert response.status_code == 200
+
+    html = response.content.decode()
+    assert "Filter Coffee" in html
+    assert "Africa" in html
+    assert "Latin America" in html
+    assert africa.get_absolute_url() in html
+    assert latin_america.get_absolute_url() in html
