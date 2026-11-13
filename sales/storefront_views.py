@@ -57,21 +57,23 @@ def cart_add(request):
     form = AddToCartForm(request.POST)
     fallback = reverse("cart_detail")
     if not form.is_valid():
+        if is_ajax:return JsonResponse({"error": "Please choose a valid quantity."}, status=400)
         messages.error(request, "Please choose a valid quantity.")
         return redirect(_safe_next(request, fallback))
     variant = get_object_or_404(ProductVariant.objects.select_related("product"), pk=form.cleaned_data["variant"])
     try:
         services.add_to_cart(services.get_cart_for_request(request), variant, form.cleaned_data["quantity"])
     except ValidationError as exc:
-        messages.error(request, _error_text(exc))
         if is_ajax: 
             return JsonResponse({"error": _error_text(exc)}, status=400)
+        messages.error(request, _error_text(exc))
         return redirect(_safe_next(request, variant.product.get_absolute_url()))
-    if is_ajax: cart = services.get_cart_for_request(request)
-    totals = services.cart_totals(cart)
-    items = [{ "id": item.id, "name": item.variant.product.name, "quantity": item.quantity,}
+    cart = services.get_cart_for_request(request)
+    if is_ajax:
+        totals = services.cart_totals(cart)
+        items = [{ "id": item.id, "name": item.variant.product.name, "quantity": item.quantity,}
              for item in cart.items.select_related("variant__product").all()]
-    return JsonResponse({"cart_count": cart.item_count, "subtotal": str(totals["subtotal"]), "items": items, "total": str(totals["total"])}) 
+        return JsonResponse({"cart_count": cart.item_count, "subtotal": str(totals["subtotal"]), "items": items, "total": str(totals["total"])})
     messages.success(request, f"Added {variant.product.name} to your cart.")
     return redirect(_safe_next(request, fallback))
 
@@ -93,17 +95,19 @@ def cart_update(request):
         quantity = form.cleaned_data["quantity"]
         if quantity == 0:
             item.delete()
-            messages.info(request, "Item removed.")
+            if not is_ajax:
+             messages.info(request, "Item removed.")
         else:
             try:
                 services.add_to_cart(item.cart, item.variant, quantity, replace=True)
                 if not is_ajax:
                  messages.success(request, "Cart updated.")
             except ValidationError as exc:
-                messages.error(request, _error_text(exc))
                 if is_ajax:
-                    return JsonResponse({"error":_error_text}, status=400)
+                 return JsonResponse({"error":_error_text(exc)}, status=400)
+                messages.error(request, _error_text(exc))
     else:
+        if is_ajax: return JsonResponse({"error": "Invalid quantity."}, status=400)
         messages.error(request, "Invalid quantity.")
     if is_ajax: 
         cart = services.get_cart_for_request(request)

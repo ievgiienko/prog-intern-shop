@@ -110,3 +110,49 @@ def test_registration_creates_profile_and_logs_in(client, db):
     profile = client.get(reverse("profile"))
     assert profile.status_code == 200 and profile.context["user"].customer_profile.city == "Valencia"
     assert profile.context["user"].groups.filter(name="Customer").exists()
+
+
+def test_cart_add_with_and_without_ajax(client, catalog):
+    variant = _variant(catalog, "P1")
+    url = reverse("cart_add")
+    response = client.post(url, {"variant": variant.id, "quantity": 1}
+    )
+    assert response.status_code == 302
+    response = client.post(url, {"variant": variant.id, "quantity": 1},HTTP_X_REQUESTED_WITH="XMLHttpRequest",)
+    assert response.status_code == 200
+    data = response.json()
+    assert "cart_count" in data
+    assert "subtotal" in data
+    assert "items" in data
+
+def test_cart_update_with_and_without_ajax(client, catalog):
+    variant = _variant(catalog, "P1")
+    client.post(reverse("cart_add"), {"variant": variant.id, "quantity": 1})
+    cart = Cart.objects.get(active=True)
+    item = cart.items.get()
+    url = reverse("cart_update")
+    response = client.post(url, {"item": item.id, "quantity": 2})
+    assert response.status_code == 302
+    item.refresh_from_db()
+    assert item.quantity == 2
+    response = client.post(url, {"item": item.id, "quantity": 1},HTTP_X_REQUESTED_WITH="XMLHttpRequest",)
+    assert response.status_code == 200
+    data = response.json()
+    assert "cart_count" in data
+    assert "subtotal" in data
+    assert "items" in data
+    item.refresh_from_db()
+    assert item.quantity == 1
+
+def test_cart_ajax_out_of_stock(client, catalog):
+    variant = _variant(catalog, "P1")
+    available = variant.available_quantity
+    response = client.post(reverse("cart_add"),{
+        "variant": variant.id,
+        "quantity": available + 1,
+    },
+HTTP_X_REQUESTED_WITH="XMLHttpRequest"
+    )
+    assert response.status_code == 400
+    assert "error" in response.json()
+    assert not Cart.objects.filter(active=True, items__isnull=False).exists()

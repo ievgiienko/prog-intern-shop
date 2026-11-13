@@ -162,7 +162,7 @@
         var currentQuantity = parseInt(quantity.textContent, 10);
         var csrfToken = document.querySelector('[name="csrfmiddlewaretoken"]').value
         if (e.target.matches("[data-mini-plus]")) {
-          quantity.textContent = currentQuantity +1;
+          quantity.textContent = currentQuantity + 1;
         }
         if (e.target.matches("[data-mini-minus]") && currentQuantity > 0) {
           quantity.textContent = currentQuantity -1;
@@ -186,10 +186,15 @@
           headers: { "X-Requested-With": "XMLHttpRequest"}
         })
         .then(function (response) {
-          return response.json();
+          return response.json().then(function(data) {
+            if (!response.ok) {
+              throw new Error(data.error || "Could not update cart");
+            }
+            return data;
+          });
         })
         .then(function (data) {
-          var cartCount = document.querySelector("[data-cart-count");
+          var cartCount = document.querySelector("[data-cart-count]");
           if (cartCount) {
             cartCount.textContent = data.cart_count;
           }
@@ -205,6 +210,10 @@
           if (loading) {
             loading.hidden = true;
           }
+        })
+        .catch(function (error) {
+          quantity.textContent = currentQuantity;
+          alert(error.message);
         })
         .finally(function () {
           buttons.forEach(function (button) {
