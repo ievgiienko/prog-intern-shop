@@ -289,6 +289,102 @@ address{font-style:normal;color:var(--ink-2);font-size:.92rem;margin-bottom:1rem
 .nav-children a:hover{background:var(--sand);color:var(--ink);text-decoration:none}
 .nav-count{display:inline-flex;align-items:center;justify-content:center;min-width:1.5rem;height:1.35rem;padding:0 .35rem;border-radius:999px;background:var(--sand);color:var(--muted);font-size:.72rem;font-weight:600;line-height:1}
 
+/*Mini-cart*/
+.mini-cart{
+  position: absolute;
+  top: 100%;
+  right: 0;
+  width: 200px;
+  padding: 25px;
+  background: white;
+  border: 1px solid white;
+  border-radius: 15px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.15);
+  z-index: 1000;
+}
+.mini-cart__header{
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 20px;
+}
+.mini-cart__body{
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+.mini-cart__body p{
+  margin: 0;
+  padding: 10px 0;
+  border-bottom: 1px solid wheat;
+}
+.mini-cart__close{
+  cursor: pointer;
+}
+.mini-cart[hidden]{
+  display: none;
+}
+.mini-cart__item{
+  padding: 15px 0;
+  border-bottom: 1px solid wheat;
+}
+.mini-cart__item > span{
+  display: block;
+  margin-bottom: 10px;
+  font-weight: 500;
+}
+.mini-cart__quantity{
+  display: flex;
+  align-items: center;
+  gap: 10px; 
+}
+.mini-cart__quantity button{
+  width: 30px;
+  height: 30px;
+  border: 1px solid rgb(235, 201, 139);
+  border-radius: 6px;
+  background: rgb(241, 233, 216);
+  cursor: pointer;
+  font-size: 18px;
+}
+.mini-cart__quantity button:hover{
+  background: rgb(193, 189, 181);
+}
+.mini-cart__close{
+  width: 35px;
+  height: 35px;
+  border: 1px solid rgb(244, 227, 194);
+  border-radius: 6px;
+  background: rgb(241, 233, 216);
+  font-size: 18px;
+}
+.mini-cart__actions{
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  margin-top: 13px;
+  padding-top: 18px;
+  border-top: 1px solid var(--line-2);
+}
+.mini-cart__actions a{
+  display: block;
+  padding: 10px;
+  border: 2px solid var(--line-2);
+  border-radius: 5px;
+  text-align: center;
+  text-decoration: none;
+  color: white;
+  background-color: var(--ink);
+}
+.mini-cart__actions a:hover,
+.mini-cart__actions a:active{
+  background-color: rgba(200, 80, 6, 0.923);
+  color: white;
+  border-color: rgba(200, 80, 6, 0.923);
+}
+.badge[hidden]{
+  display: none;
+}
 
 /* Empty search state improvements */
 .empty-state > .button{margin:1.25rem 0 2rem}

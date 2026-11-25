@@ -104,6 +104,8 @@ def add_to_cart(cart, variant, quantity=1, replace=False):
     if not created:
         item.quantity = quantity if replace else item.quantity + quantity
     if item.quantity > variant.available_quantity:
+        if variant.available_quantity == 0:
+            raise ValidationError("Sorry, this product is out of stock.")
         raise ValidationError(f"Only {variant.available_quantity} unit(s) of {variant.product.name} are available")
     item.full_clean()
     item.save()
